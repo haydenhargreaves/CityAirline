@@ -7,7 +7,7 @@ This document outlines the naming convention for this project.
 **Plural Nouns**
 
 The statement "select lots of planes from plane" feels wrong. We will use plural nouns
-since the database will store many of each entity.
+since the database will store many of each entity. Table names should be PascalCase.
 
 >
 > Airlines, Planes, Seats, etc
