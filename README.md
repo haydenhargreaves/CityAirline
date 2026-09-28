@@ -52,3 +52,17 @@ was updated.
 
 This will provide all of the data we may need to keep track of changes and creations
 in the database! **AND** it requires no extra work when creating records!
+
+## Python Scripts
+
+To run the python seeding scripts, they are to be run in this way:
+
+```bash
+python -m scripts.seed.script_name
+```
+
+The entire database can be seeded by running the following command:
+
+```bash
+python -m scripts.seed
+```
