@@ -66,3 +66,17 @@ The entire database can be seeded by running the following command:
 ```bash
 python -m scripts.seed
 ```
+
+## Streamlit App
+
+Install the dependencies and run the app:
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Set the `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, and
+`MYSQL_DATABASE` environment variables before starting the app. See
+[.env.example](.env.example) for the expected settings. The app supports flight
+search, seat selection, booking, and passenger contact updates.
