@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from scripts.lib.db import get_connection
 
-from app.models import Airport, AvailableSeat, Flight, SeatSummary
+from app.models import Airport, AvailableSeat, Flight, Passenger, SeatSummary
 
 
 class TicketUnavailableError(Exception):
@@ -37,13 +37,51 @@ class CityAirlineData:
             )
             return [Airport(*row) for row in cursor.fetchall()]
 
+    def list_passengers(self) -> list[Passenger]:
+        """Return passenger profiles for returning travelers."""
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, contact_information
+                FROM Passengers
+                ORDER BY contact_information
+                """
+            )
+            return [Passenger(*row) for row in cursor.fetchall()]
+
     def search_flights(
         self,
         departure_airport_id: str,
         arrival_airport_id: str,
         travel_date: date,
+        below_route_average: bool = False,
     ) -> list[Flight]:
-        """Return flights for a route and departure date."""
+        """Return route flights, optionally limited to below-average fares."""
+        average_price_filter = ""
+        parameters: tuple[Any, ...] = (
+            departure_airport_id,
+            arrival_airport_id,
+            travel_date,
+        )
+        if below_route_average:
+            average_price_filter = """
+                HAVING MIN(Tickets.cost) < (
+                    SELECT AVG(AvailableTickets.cost)
+                    FROM Flights AS RouteFlights
+                    INNER JOIN Tickets AS AvailableTickets
+                        ON AvailableTickets.flight_id = RouteFlights.id
+                        AND AvailableTickets.sale_status = 'available'
+                        AND AvailableTickets.passenger_id IS NULL
+                    WHERE RouteFlights.airport_id_departure = %s
+                        AND RouteFlights.airport_id_arrival = %s
+                        AND DATE(RouteFlights.departure_time) = %s
+                )
+            """
+            parameters += (
+                departure_airport_id,
+                arrival_airport_id,
+                travel_date,
+            )
         with self._cursor() as cursor:
             cursor.execute(
                 """
@@ -88,9 +126,10 @@ class CityAirlineData:
                     departure_airport.name,
                     arrival_airport.code,
                     arrival_airport.name
+                {average_price_filter}
                 ORDER BY Flights.departure_time
                 """,
-                (departure_airport_id, arrival_airport_id, travel_date),
+                parameters,
             )
             return [Flight(*row) for row in cursor.fetchall()]
 
@@ -145,19 +184,27 @@ class CityAirlineData:
             )
             return cursor.rowcount == 1
 
-    def purchase_ticket(self, ticket_id: str, contact_information: str) -> str:
-        """Create a traveler and mark an available ticket sold in one transaction."""
+    def purchase_ticket(
+        self,
+        ticket_id: str,
+        passenger_id: str | None = None,
+        contact_information: str | None = None,
+    ) -> str:
+        """Create or use a traveler and sell an available ticket atomically."""
         connection = self.connection_factory()
         cursor = connection.cursor(buffered=True)
         try:
-            passenger_id = str(uuid4())
-            cursor.execute(
-                """
-                INSERT INTO Passengers (id, contact_information)
-                VALUES (%s, %s)
-                """,
-                (passenger_id, contact_information),
-            )
+            if passenger_id is None:
+                if not contact_information:
+                    raise ValueError("Contact information is required for a new traveler.")
+                passenger_id = str(uuid4())
+                cursor.execute(
+                    """
+                    INSERT INTO Passengers (id, contact_information)
+                    VALUES (%s, %s)
+                    """,
+                    (passenger_id, contact_information),
+                )
             cursor.execute(
                 """
                 UPDATE Tickets

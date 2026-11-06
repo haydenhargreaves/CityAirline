@@ -21,6 +21,19 @@ class Airport:
 
 
 @dataclass(frozen=True)
+class Passenger:
+    """A passenger profile available for booking or contact updates."""
+
+    id: str
+    contact_information: str
+
+    @property
+    def label(self) -> str:
+        """Return the contact displayed in the passenger selector."""
+        return self.contact_information
+
+
+@dataclass(frozen=True)
 class Flight:
     """Flight information displayed in search results."""
 

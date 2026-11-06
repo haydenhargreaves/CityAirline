@@ -50,7 +50,7 @@ class PurchaseTicketTests(unittest.TestCase):
         connection = FakeConnection(ticket_update_count=1)
 
         passenger_id = CityAirlineData(lambda: connection).purchase_ticket(
-            "ticket-id", "traveler@example.com"
+            "ticket-id", contact_information="traveler@example.com"
         )
 
         self.assertTrue(passenger_id)
@@ -62,7 +62,7 @@ class PurchaseTicketTests(unittest.TestCase):
 
         with self.assertRaises(TicketUnavailableError):
             CityAirlineData(lambda: connection).purchase_ticket(
-                "ticket-id", "traveler@example.com"
+                "ticket-id", contact_information="traveler@example.com"
             )
 
         self.assertFalse(connection.committed)
