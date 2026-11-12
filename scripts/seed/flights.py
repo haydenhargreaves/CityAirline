@@ -36,7 +36,11 @@ if __name__ == "__main__":
         flights = []
         for plane_index, (plane_id, plane_code) in enumerate(planes):
             for flight_index in range(FLIGHTS_PER_PLANE):
-                departure_airport_id, arrival_airport_id = random.sample(airport_ids, 2)
+                if plane_index == 0:
+                    # Keep three flights on one route so the fare-deal report has data.
+                    departure_airport_id, arrival_airport_id = airport_ids[:2]
+                else:
+                    departure_airport_id, arrival_airport_id = random.sample(airport_ids, 2)
                 departure_time = datetime(2026, 10, 1, 8, 0) + timedelta(
                     days=plane_index,
                     hours=flight_index * 5,
@@ -121,7 +125,11 @@ if __name__ == "__main__":
             for seat_id in seats_by_plane[plane_id]:
                 tickets.append(
                     {
-                        "cost": Decimal("49.99"),
+                        "cost": (
+                            Decimal("39.99")
+                            if flight["flight_number"].endswith("01")
+                            else Decimal("89.99")
+                        ),
                         "sale_price": None,
                         "sale_date": None,
                         "sale_status": "available",

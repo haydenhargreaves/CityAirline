@@ -76,23 +76,26 @@ in `sql/application_accounts.sql`, then run it as root:
 mysql -u root -p < sql/application_accounts.sql
 ```
 
-4. Configure the `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`,
-and `MYSQL_DATABASE` environment variables. Set `MYSQL_USER` to
-`city_airline_client`; do not run the Streamlit app as root. See
-[.env.example](.env.example).
-
-5. Install Python dependencies and seed the database:
+4. Configure the `MYSQL_*` variables with the root account only while running
+the seed scripts, then install dependencies and seed the database:
 
 ```bash
 pip install -r requirements.txt
 python -m scripts.seed
 ```
 
+5. Configure `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, and
+`MYSQL_DATABASE` for `city_airline_client`. Do not run the Streamlit app as
+root. See [.env.example](.env.example).
+
 6. Start the application:
 
 ```bash
 streamlit run app.py
 ```
+
+The search controls require an exact seeded route and date. The first three seeded
+flights share a route and date so the Fare Deals tab can demonstrate its report.
 
 ## Python Scripts
 
@@ -110,3 +113,27 @@ python -m scripts.seed
 
 The Streamlit app supports flight search, seat selection, booking, and passenger
 contact updates.
+
+## Application Features
+
+| User action | Requirement |
+| --- | --- |
+| Search Flights | Search (`WHERE`) |
+| View Flight Details | Combine tables (`JOIN`) |
+| View Seat Summary | Summary (`GROUP BY`) |
+| Find Fare Deals | Subquery |
+| Create Passenger Profile | Add (`INSERT`) |
+| Update Passenger Contact | Change (`UPDATE`) |
+| Purchase Ticket | Transaction |
+
+## Team Roles
+
+| Team member | Responsibility |
+| --- | --- |
+| Preston | Streamlit application and interface |
+| Hayden | Queries, transactions, accounts, and grants |
+| Cody | Schema, seed data, testing, documentation, and presentation |
+
+## AI Use
+
+AI was used for permitted application interface and boilerplate assistance.
