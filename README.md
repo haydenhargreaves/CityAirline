@@ -66,20 +66,21 @@ docker compose up -d
 2. Create the database tables:
 
 ```bash
-mysql -u root -p < sql/init_001.up.sql
+docker compose exec -T mysql mysql -uroot -proot < sql/init_001.up.sql
 ```
 
 3. Create the limited application accounts by replacing the password placeholders
 in `sql/application_accounts.sql`, then run it as root:
 
 ```bash
-mysql -u root -p < sql/application_accounts.sql
+docker compose exec -T mysql mysql -uroot -proot < sql/application_accounts.sql
 ```
 
 4. Configure the `MYSQL_*` variables with the root account only while running
 the seed scripts, then install dependencies and seed the database:
 
 ```bash
+set -a; source .env; set +a
 pip install -r requirements.txt
 python -m scripts.seed
 ```

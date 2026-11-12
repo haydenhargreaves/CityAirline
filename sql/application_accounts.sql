@@ -1,8 +1,7 @@
 -- Run this script as root after sql/init_001.up.sql.
 -- Replace both placeholder passwords before running it. Do not commit real passwords.
 
-CREATE USER IF NOT EXISTS 'city_airline_client'@'%'
-    IDENTIFIED BY 'REPLACE_WITH_CLIENT_PASSWORD';
+CREATE USER IF NOT EXISTS 'city_airline_client'@'%' IDENTIFIED BY 'root';
 
 GRANT SELECT ON city_airline.Airlines TO 'city_airline_client'@'%';
 GRANT SELECT ON city_airline.Airports TO 'city_airline_client'@'%';
@@ -14,8 +13,7 @@ GRANT SELECT ON city_airline.Passengers TO 'city_airline_client'@'%';
 GRANT INSERT, UPDATE ON city_airline.Passengers TO 'city_airline_client'@'%';
 GRANT UPDATE ON city_airline.Tickets TO 'city_airline_client'@'%';
 
-CREATE USER IF NOT EXISTS 'city_airline_data_entry'@'%'
-    IDENTIFIED BY 'REPLACE_WITH_DATA_ENTRY_PASSWORD';
+CREATE USER IF NOT EXISTS 'city_airline_data_entry'@'%' IDENTIFIED BY 'root';
 
 GRANT SELECT, INSERT, UPDATE ON city_airline.Airlines TO 'city_airline_data_entry'@'%';
 GRANT SELECT, INSERT, UPDATE ON city_airline.Airports TO 'city_airline_data_entry'@'%';
