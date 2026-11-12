@@ -34,6 +34,20 @@ class Passenger:
 
 
 @dataclass(frozen=True)
+class FlightSearchResult:
+    """The minimal flight information returned by a route/date search."""
+
+    id: str
+    flight_number: str
+    departure_time: datetime
+
+    @property
+    def label(self) -> str:
+        """Return the flight label used by selection controls."""
+        return f"{self.flight_number} - {self.departure_time:%Y-%m-%d %H:%M}"
+
+
+@dataclass(frozen=True)
 class Flight:
     """Flight information displayed in search results."""
 
