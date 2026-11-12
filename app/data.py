@@ -14,6 +14,7 @@ from app.models import (
     AvailableSeat,
     Flight,
     FlightSearchResult,
+    Fare,
     Passenger,
     SeatSummary,
 )
@@ -152,6 +153,33 @@ class CityAirlineData:
             travel_date,
             below_route_average=True,
         )
+
+    def list_route_fares(
+        self, departure_airport_id: str, arrival_airport_id: str, travel_date: date
+    ) -> list[Fare]:
+        """Return every available ticket fare for a route and travel date."""
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    Flights.flight_number,
+                    Flights.departure_time,
+                    Seats.seat_number,
+                    Seats.class_designation,
+                    Tickets.cost
+                FROM Tickets
+                INNER JOIN Flights ON Flights.id = Tickets.flight_id
+                INNER JOIN Seats ON Seats.id = Tickets.seat_id
+                WHERE Flights.airport_id_departure = %s
+                    AND Flights.airport_id_arrival = %s
+                    AND DATE(Flights.departure_time) = %s
+                    AND Tickets.sale_status = 'available'
+                    AND Tickets.passenger_id IS NULL
+                ORDER BY Flights.departure_time, Tickets.cost, Seats.seat_number
+                """,
+                (departure_airport_id, arrival_airport_id, travel_date),
+            )
+            return [Fare(*row) for row in cursor.fetchall()]
 
     def search_flights(
         self,

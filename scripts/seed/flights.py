@@ -1,9 +1,10 @@
-"""Seed every directed airport route for every day in November 2026."""
+"""Seed three daily flights for every directed airport route in November 2026."""
 
 from collections.abc import Iterable, Iterator
 from datetime import datetime, timedelta
 from decimal import Decimal
 from itertools import islice
+from random import SystemRandom
 from typing import Any
 
 from scripts.lib.db import cursor
@@ -11,8 +12,11 @@ from scripts.lib.db import cursor
 
 NOVEMBER_START = datetime(2026, 11, 1)
 DAYS_IN_NOVEMBER = 30
+FLIGHTS_PER_ROUTE_PER_DAY = 3
+TICKETS_PER_FLIGHT = 6
 FLIGHT_BATCH_SIZE = 1_000
 TICKET_BATCH_SIZE = 1_000
+PRICE_RANDOM = SystemRandom()
 
 
 def batches(items: Iterable[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:
@@ -27,23 +31,19 @@ def ticket_rows(
     flight_ids: dict[str, tuple[str, str]],
     seats_by_plane: dict[str, list[tuple[str, str]]],
 ) -> Iterator[dict[str, Any]]:
-    """Create one bookable ticket per new route without overloading local MySQL."""
+    """Create multiple available seats with randomized fares for each flight."""
     for flight in flights:
         flight_id, plane_id = flight_ids[flight["flight_number"]]
-        route_fare = Decimal("29.99") + Decimal("10.00") * (
-            int(flight["route_index"]) % 4
-        )
-        seat_id, class_designation = seats_by_plane[plane_id][0]
-        yield {
-            "cost": route_fare
-            + (Decimal("25.00") if class_designation == "First" else Decimal("0")),
-            "sale_price": None,
-            "sale_date": None,
-            "sale_status": "available",
-            "passenger_id": None,
-            "seat_id": seat_id,
-            "flight_id": flight_id,
-        }
+        for seat_id, _ in seats_by_plane[plane_id][:TICKETS_PER_FLIGHT]:
+            yield {
+                "cost": Decimal(PRICE_RANDOM.randint(2999, 9999)) / Decimal("100"),
+                "sale_price": None,
+                "sale_date": None,
+                "sale_status": "available",
+                "passenger_id": None,
+                "seat_id": seat_id,
+                "flight_id": flight_id,
+            }
 
 
 if __name__ == "__main__":
@@ -77,27 +77,34 @@ if __name__ == "__main__":
                     if departure_index == arrival_index:
                         continue
                     route_index = departure_index * len(airports) + arrival_index
-                    plane_id, _ = planes[route_index % len(planes)]
-                    departure_time = NOVEMBER_START + timedelta(
-                        days=day_offset,
-                        hours=5 + route_index % 16,
-                        minutes=(route_index * 7) % 60,
-                    )
-                    flights.append(
-                        {
-                            # Airport indexes keep the identifier well below the 32-character limit.
-                            "flight_number": (
-                                f"NOV26-{day_offset + 1:02d}-{departure_index:02d}-{arrival_index:02d}"
-                            ),
-                            "departure_time": departure_time,
-                            "boarding_time": departure_time - timedelta(minutes=45),
-                            "airline_id": airline_ids[route_index % len(airline_ids)],
-                            "plane_id": plane_id,
-                            "airport_id_departure": departure_airport_id,
-                            "airport_id_arrival": arrival_airport_id,
-                            "route_index": route_index,
-                        }
-                    )
+                    for departure_sequence in range(FLIGHTS_PER_ROUTE_PER_DAY):
+                        plane_id, _ = planes[
+                            (route_index + departure_sequence) % len(planes)
+                        ]
+                        departure_time = NOVEMBER_START + timedelta(
+                            days=day_offset,
+                            hours=5 + (route_index + departure_sequence * 5) % 16,
+                            minutes=(route_index * 7) % 60,
+                        )
+                        flight_number = (
+                            f"NOV26-{day_offset + 1:02d}-{departure_index:02d}-{arrival_index:02d}"
+                        )
+                        if departure_sequence:
+                            flight_number += f"-{departure_sequence + 1:02d}"
+                        flights.append(
+                            {
+                                # Airport indexes keep the identifier well below the 32-character limit.
+                                "flight_number": flight_number,
+                                "departure_time": departure_time,
+                                "boarding_time": departure_time - timedelta(minutes=45),
+                                "airline_id": airline_ids[
+                                    (route_index + departure_sequence) % len(airline_ids)
+                                ],
+                                "plane_id": plane_id,
+                                "airport_id_departure": departure_airport_id,
+                                "airport_id_arrival": arrival_airport_id,
+                            }
+                        )
 
         db.execute(
             """
@@ -148,7 +155,12 @@ if __name__ == "__main__":
         plane_ids = [plane_id for plane_id, _ in planes]
         placeholders = ", ".join(["%s"] * len(plane_ids))
         db.execute(
-            f"SELECT id, plane_id, class_designation FROM Seats WHERE plane_id IN ({placeholders})",
+            f"""
+            SELECT id, plane_id, class_designation
+            FROM Seats
+            WHERE plane_id IN ({placeholders})
+            ORDER BY plane_id, seat_number
+            """,
             plane_ids,
         )
         seats_by_plane: dict[str, list[tuple[str, str]]] = {
@@ -158,11 +170,11 @@ if __name__ == "__main__":
             seats_by_plane[plane_id].append((seat_id, class_designation))
 
         for ticket_batch in batches(
-            ticket_rows(new_flights, flight_ids, seats_by_plane), TICKET_BATCH_SIZE
+            ticket_rows(flights, flight_ids, seats_by_plane), TICKET_BATCH_SIZE
         ):
             db.executemany(
                 """
-                INSERT INTO Tickets (
+                INSERT IGNORE INTO Tickets (
                     cost, sale_price, sale_date, sale_status, passenger_id, seat_id, flight_id
                 )
                 VALUES (

@@ -137,29 +137,40 @@ def show_seat_summary(data: CityAirlineData) -> None:
 
 
 def show_fare_deals(data: CityAirlineData, airports: list[Airport]) -> None:
-    """Render the required subquery feature as a separate action."""
-    st.subheader("4. Find Fare Deals")
+    """Render all available route fares and their price summary."""
+    st.subheader("4. View Fares")
     with st.form("fare_deals"):
         departure, arrival, travel_date = airport_controls(airports, "deals")
-        submitted = st.form_submit_button("Find below-average fares")
+        submitted = st.form_submit_button("View fares")
     if not submitted:
         return
     try:
-        deals = data.find_fare_deals(departure.id, arrival.id, travel_date)
+        fares = data.list_route_fares(departure.id, arrival.id, travel_date)
     except Exception as error:
-        show_database_error(error, "Unable to find fare deals right now.")
+        show_database_error(error, "Unable to load fares right now.")
         return
-    if not deals:
-        st.info("No fares on this route are below the route average.")
+    if not fares:
+        st.info("No available fares were found for this route and date.")
         return
+
+    prices = [fare.price for fare in fares]
+    minimum, maximum = min(prices), max(prices)
+    average = sum(prices) / len(prices)
+    minimum_column, maximum_column, average_column = st.columns(3)
+    minimum_column.metric("Minimum fare", f"${minimum:.2f}")
+    maximum_column.metric("Maximum fare", f"${maximum:.2f}")
+    average_column.metric("Average fare", f"${average:.2f}")
+
     st.dataframe(
         [
             {
-                "Flight": deal.flight_number,
-                "Departure": deal.departure_time,
-                "Lowest available fare": deal.lowest_available_price,
+                "Flight": fare.flight_number,
+                "Departure": fare.departure_time,
+                "Seat": fare.seat_number,
+                "Class": fare.class_designation,
+                "Fare": fare.price,
             }
-            for deal in deals
+            for fare in fares
         ],
         hide_index=True,
         use_container_width=True,

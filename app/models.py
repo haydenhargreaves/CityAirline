@@ -88,3 +88,14 @@ class AvailableSeat:
     def label(self) -> str:
         """Return the label shown in the seat selector."""
         return f"Seat {self.seat_number} ({self.class_designation}) - ${self.price:.2f}"
+
+
+@dataclass(frozen=True)
+class Fare:
+    """One available ticket fare displayed in the fare report."""
+
+    flight_number: str
+    departure_time: datetime
+    seat_number: int
+    class_designation: str
+    price: Decimal
