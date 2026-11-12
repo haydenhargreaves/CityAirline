@@ -82,55 +82,53 @@ class CityAirlineData:
                 arrival_airport_id,
                 travel_date,
             )
+        query = """
+            SELECT
+                Flights.id,
+                Flights.flight_number,
+                Flights.departure_time,
+                Flights.boarding_time,
+                Airlines.name,
+                Airlines.code,
+                Planes.name,
+                Planes.code,
+                departure_airport.code,
+                departure_airport.name,
+                arrival_airport.code,
+                arrival_airport.name,
+                MIN(Tickets.cost) AS lowest_available_price
+            FROM Flights
+            INNER JOIN Airlines ON Airlines.id = Flights.airline_id
+            INNER JOIN Planes ON Planes.id = Flights.plane_id
+            INNER JOIN Airports AS departure_airport
+                ON departure_airport.id = Flights.airport_id_departure
+            INNER JOIN Airports AS arrival_airport
+                ON arrival_airport.id = Flights.airport_id_arrival
+            LEFT JOIN Tickets
+                ON Tickets.flight_id = Flights.id
+                AND Tickets.sale_status = 'available'
+                AND Tickets.passenger_id IS NULL
+            WHERE Flights.airport_id_departure = %s
+                AND Flights.airport_id_arrival = %s
+                AND DATE(Flights.departure_time) = %s
+            GROUP BY
+                Flights.id,
+                Flights.flight_number,
+                Flights.departure_time,
+                Flights.boarding_time,
+                Airlines.name,
+                Airlines.code,
+                Planes.name,
+                Planes.code,
+                departure_airport.code,
+                departure_airport.name,
+                arrival_airport.code,
+                arrival_airport.name
+        """
+        query += average_price_filter
+        query += "ORDER BY Flights.departure_time"
         with self._cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT
-                    Flights.id,
-                    Flights.flight_number,
-                    Flights.departure_time,
-                    Flights.boarding_time,
-                    Airlines.name,
-                    Airlines.code,
-                    Planes.name,
-                    Planes.code,
-                    departure_airport.code,
-                    departure_airport.name,
-                    arrival_airport.code,
-                    arrival_airport.name,
-                    MIN(Tickets.cost) AS lowest_available_price
-                FROM Flights
-                INNER JOIN Airlines ON Airlines.id = Flights.airline_id
-                INNER JOIN Planes ON Planes.id = Flights.plane_id
-                INNER JOIN Airports AS departure_airport
-                    ON departure_airport.id = Flights.airport_id_departure
-                INNER JOIN Airports AS arrival_airport
-                    ON arrival_airport.id = Flights.airport_id_arrival
-                LEFT JOIN Tickets
-                    ON Tickets.flight_id = Flights.id
-                    AND Tickets.sale_status = 'available'
-                    AND Tickets.passenger_id IS NULL
-                WHERE Flights.airport_id_departure = %s
-                    AND Flights.airport_id_arrival = %s
-                    AND DATE(Flights.departure_time) = %s
-                GROUP BY
-                    Flights.id,
-                    Flights.flight_number,
-                    Flights.departure_time,
-                    Flights.boarding_time,
-                    Airlines.name,
-                    Airlines.code,
-                    Planes.name,
-                    Planes.code,
-                    departure_airport.code,
-                    departure_airport.name,
-                    arrival_airport.code,
-                    arrival_airport.name
-                {average_price_filter}
-                ORDER BY Flights.departure_time
-                """,
-                parameters,
-            )
+            cursor.execute(query, parameters)
             return [Flight(*row) for row in cursor.fetchall()]
 
     def get_seat_summary(self, flight_id: str) -> list[SeatSummary]:
