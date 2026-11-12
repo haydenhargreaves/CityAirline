@@ -53,6 +53,47 @@ was updated.
 This will provide all of the data we may need to keep track of changes and creations
 in the database! **AND** it requires no extra work when creating records!
 
+## Running the Project
+
+Prerequisites: Python 3.12+, Docker Desktop, and the MySQL command-line client.
+
+1. Start MySQL:
+
+```bash
+docker compose up -d
+```
+
+2. Create the database tables:
+
+```bash
+mysql -u root -p < sql/init_001.up.sql
+```
+
+3. Create the limited application accounts by replacing the password placeholders
+in `sql/application_accounts.sql`, then run it as root:
+
+```bash
+mysql -u root -p < sql/application_accounts.sql
+```
+
+4. Configure the `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`,
+and `MYSQL_DATABASE` environment variables. Set `MYSQL_USER` to
+`city_airline_client`; do not run the Streamlit app as root. See
+[.env.example](.env.example).
+
+5. Install Python dependencies and seed the database:
+
+```bash
+pip install -r requirements.txt
+python -m scripts.seed
+```
+
+6. Start the application:
+
+```bash
+streamlit run app.py
+```
+
 ## Python Scripts
 
 To run the python seeding scripts, they are to be run in this way:
@@ -67,16 +108,5 @@ The entire database can be seeded by running the following command:
 python -m scripts.seed
 ```
 
-## Streamlit App
-
-Install the dependencies and run the app:
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-Set the `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, and
-`MYSQL_DATABASE` environment variables before starting the app. See
-[.env.example](.env.example) for the expected settings. The app supports flight
-search, seat selection, booking, and passenger contact updates.
+The Streamlit app supports flight search, seat selection, booking, and passenger
+contact updates.
