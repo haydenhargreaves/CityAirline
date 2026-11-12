@@ -1,200 +1,339 @@
-"""Simple Streamlit interface for searching and booking City Airline flights."""
+"""Streamlit interface for the City Airline database application."""
 
 from datetime import date
 
 import streamlit as st
 
-from app.data import CityAirlineData, TicketUnavailableError
-from app.models import Airport, Flight
+from app.data import (
+    CityAirlineData,
+    ConstraintViolationError,
+    PermissionDeniedError,
+    TicketUnavailableError,
+)
+from app.models import Airport, Flight, FlightSearchResult
 
 
 @st.cache_resource
 def get_data() -> CityAirlineData:
-    """Reuse the lightweight data-access service across Streamlit reruns."""
+    """Reuse the data-access service across Streamlit reruns."""
     return CityAirlineData()
 
 
-def flight_label(flight: Flight) -> str:
-    """Format a search result for the flight selector."""
-    price = (
-        f"from ${flight.lowest_available_price:.2f}"
-        if flight.lowest_available_price is not None
-        else "no seats available"
-    )
-    return (
-        f"{flight.flight_number} | {flight.departure_time:%H:%M} | "
-        f"{flight.airline_name} | {price}"
-    )
+def show_database_error(error: Exception, fallback: str) -> None:
+    """Display expected database failures without exposing raw MySQL errors."""
+    error_number = getattr(error, "errno", None)
+    messages = {
+        1062: "This record already exists.",
+        1142: "You do not have permission to perform this operation.",
+        1452: "The selected related record no longer exists.",
+    }
+    st.error(messages.get(error_number, fallback))
+
+
+def airport_controls(airports: list[Airport], form_key: str) -> tuple[Airport, Airport, date]:
+    """Render shared route controls inside a form."""
+    airport_by_label = {airport.label: airport for airport in airports}
+    labels = list(airport_by_label)
+    departure_label = st.selectbox("From", labels, key=f"{form_key}_from")
+    arrival_labels = [label for label in labels if label != departure_label]
+    arrival_label = st.selectbox("To", arrival_labels, key=f"{form_key}_to")
+    travel_date = st.date_input("Travel date", value=date.today(), key=f"{form_key}_date")
+    return airport_by_label[departure_label], airport_by_label[arrival_label], travel_date
+
+
+def selected_flight(data: CityAirlineData) -> Flight | None:
+    """Return details for the flight selected in the search workflow."""
+    flight_id = st.session_state.get("selected_flight_id")
+    return data.get_flight_details(flight_id) if flight_id else None
 
 
 def show_search(data: CityAirlineData, airports: list[Airport]) -> None:
-    """Render flight-search form and matching flights."""
-    st.header("Find a flight")
-    if len(airports) < 2:
-        st.info("At least two airports are required to search for flights.")
-        return
-
-    airport_by_label = {airport.label: airport for airport in airports}
-    labels = list(airport_by_label)
-    with st.form("flight_search"):
-        departure_label = st.selectbox("From", labels)
-        arrival_options = [label for label in labels if label != departure_label]
-        arrival_label = st.selectbox("To", arrival_options)
-        travel_date = st.date_input("Travel date", value=date.today())
-        below_route_average = st.checkbox(
-            "Only show flights with an available fare below the route average"
-        )
+    """Render the required route/date search feature."""
+    st.subheader("1. Search Flights")
+    with st.form("search_flights"):
+        departure, arrival, travel_date = airport_controls(airports, "search")
         submitted = st.form_submit_button("Search flights")
 
     if submitted:
-        departure = airport_by_label[departure_label]
-        arrival = airport_by_label[arrival_label]
-        st.session_state["flights"] = data.search_flights(
-            departure.id, arrival.id, travel_date, below_route_average
-        )
-        st.session_state["selected_flight_id"] = None
+        try:
+            st.session_state["route_results"] = data.search_route(
+                departure.id, arrival.id, travel_date
+            )
+            st.session_state.pop("selected_flight_id", None)
+        except Exception as error:
+            show_database_error(error, "Unable to search for flights right now.")
 
-    flights: list[Flight] = st.session_state.get("flights", [])
-    if not flights:
-        if "flights" in st.session_state:
+    results: list[FlightSearchResult] = st.session_state.get("route_results", [])
+    if not results:
+        if "route_results" in st.session_state:
             st.info("No flights matched that route and date.")
         return
 
-    st.subheader("Search results")
     st.dataframe(
         [
-            {
-                "Flight": flight.flight_number,
-                "Airline": flight.airline_name,
-                "From": f"{flight.departure_airport_code} - {flight.departure_airport_name}",
-                "To": f"{flight.arrival_airport_code} - {flight.arrival_airport_name}",
-                "Departure": flight.departure_time,
-                "Boarding": flight.boarding_time,
-                "Plane": flight.plane_name,
-                "Lowest available price": flight.lowest_available_price,
-            }
-            for flight in flights
+            {"Flight": result.flight_number, "Departure": result.departure_time}
+            for result in results
         ],
         hide_index=True,
         use_container_width=True,
     )
-    selected_flight = st.selectbox(
-        "Choose a flight",
-        flights,
-        format_func=flight_label,
-        key="flight_choice",
-    )
-    st.session_state["selected_flight_id"] = selected_flight.id
-    show_booking(data, selected_flight)
+    flight = st.selectbox("Select a flight", results, format_func=lambda item: item.label)
+    st.session_state["selected_flight_id"] = flight.id
+    st.success("Flight selected. Open the other tabs to view details or book a seat.")
 
 
-def show_booking(data: CityAirlineData, flight: Flight) -> None:
-    """Render seat availability and checkout for the selected flight."""
-    st.header(f"Book {flight.flight_number}")
-    summaries = data.get_seat_summary(flight.id)
-    if summaries:
-        st.dataframe(
-            [
-                {
-                    "Class": summary.class_designation,
-                    "Available seats": summary.available_seat_count,
-                    "Average price": summary.average_available_price,
-                }
-                for summary in summaries
-            ],
-            hide_index=True,
-            use_container_width=True,
-        )
-
-    seats = data.list_available_seats(flight.id)
-    if not seats:
-        st.warning("There are no available seats on this flight.")
+def show_flight_details(data: CityAirlineData) -> None:
+    """Render the required joined flight-detail feature."""
+    st.subheader("2. View Flight Details")
+    flight = selected_flight(data)
+    if flight is None:
+        st.info("Search for and select a flight first.")
         return
-
-    seat_by_label = {seat.label: seat for seat in seats}
-    with st.form("checkout"):
-        seat_label = st.selectbox("Available seat", list(seat_by_label))
-        passengers = data.list_passengers()
-        traveler_type = st.radio(
-            "Traveler", ["New traveler", "Existing passenger"], horizontal=True
-        )
-        passenger = None
-        contact_information = ""
-        if traveler_type == "Existing passenger" and passengers:
-            passenger_by_label = {
-                f"{item.contact_information} ({item.id[:8]})": item for item in passengers
+    st.dataframe(
+        [
+            {
+                "Flight": flight.flight_number,
+                "Airline": f"{flight.airline_name} ({flight.airline_code})",
+                "Plane": f"{flight.plane_name} ({flight.plane_code})",
+                "Departure airport": f"{flight.departure_airport_code} - {flight.departure_airport_name}",
+                "Arrival airport": f"{flight.arrival_airport_code} - {flight.arrival_airport_name}",
+                "Departure": flight.departure_time,
+                "Boarding": flight.boarding_time,
+                "Lowest available fare": flight.lowest_available_price,
             }
-            passenger_label = st.selectbox(
-                "Passenger", list(passenger_by_label)
-            )
-            passenger = passenger_by_label[passenger_label]
-        elif traveler_type == "Existing passenger":
-            st.info("No passenger profiles exist yet. Enter a new traveler instead.")
-            traveler_type = "New traveler"
-
-        if traveler_type == "New traveler":
-            contact_information = st.text_input("Contact information (email or phone)")
-        confirmed = st.form_submit_button("Purchase ticket")
-
-    if confirmed:
-        try:
-            data.purchase_ticket(
-                ticket_id=seat_by_label[seat_label].ticket_id,
-                passenger_id=passenger.id if passenger else None,
-                contact_information=contact_information if not passenger else None,
-            )
-        except TicketUnavailableError:
-            st.error("That seat was just sold. Please choose another available seat.")
-        except Exception as error:
-            st.error(f"Unable to complete the purchase: {error}")
-        else:
-            st.success("Your ticket has been purchased.")
-            st.rerun()
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
 
 
-def show_contact_update(data: CityAirlineData) -> None:
-    """Render a small contact-information editor for existing passengers."""
-    with st.expander("Update passenger contact information"):
-        passengers = data.list_passengers()
-        if not passengers:
-            st.info("No passenger profiles are available to update.")
+def show_seat_summary(data: CityAirlineData) -> None:
+    """Render the required grouped seat-summary feature."""
+    st.subheader("3. View Seat Summary")
+    flight = selected_flight(data)
+    if flight is None:
+        st.info("Search for and select a flight first.")
+        return
+    try:
+        summaries = data.get_seat_summary(flight.id)
+    except Exception as error:
+        show_database_error(error, "Unable to load seat availability.")
+        return
+    if not summaries:
+        st.info("No available seats remain on this flight.")
+        return
+    st.dataframe(
+        [
+            {
+                "Class": summary.class_designation,
+                "Available seats": summary.available_seat_count,
+                "Average available fare": summary.average_available_price,
+            }
+            for summary in summaries
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
+def show_fare_deals(data: CityAirlineData, airports: list[Airport]) -> None:
+    """Render the required subquery feature as a separate action."""
+    st.subheader("4. Find Fare Deals")
+    with st.form("fare_deals"):
+        departure, arrival, travel_date = airport_controls(airports, "deals")
+        submitted = st.form_submit_button("Find below-average fares")
+    if not submitted:
+        return
+    try:
+        deals = data.find_fare_deals(departure.id, arrival.id, travel_date)
+    except Exception as error:
+        show_database_error(error, "Unable to find fare deals right now.")
+        return
+    if not deals:
+        st.info("No fares on this route are below the route average.")
+        return
+    st.dataframe(
+        [
+            {
+                "Flight": deal.flight_number,
+                "Departure": deal.departure_time,
+                "Lowest available fare": deal.lowest_available_price,
+            }
+            for deal in deals
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
+def show_create_passenger(data: CityAirlineData) -> None:
+    """Render the required passenger INSERT feature."""
+    st.subheader("5. Create Passenger Profile")
+    with st.form("create_passenger"):
+        contact_information = st.text_input("Contact information (email or phone)")
+        submitted = st.form_submit_button("Create profile")
+    if submitted:
+        if not contact_information.strip():
+            st.error("Contact information cannot be empty.")
             return
+        try:
+            data.create_passenger(contact_information.strip())
+        except Exception as error:
+            show_database_error(error, "Unable to create the passenger profile.")
+        else:
+            st.success("Passenger profile created.")
 
-        passenger_by_label = {
-            f"{passenger.contact_information} ({passenger.id[:8]})": passenger
-            for passenger in passengers
-        }
-        with st.form("update_contact"):
-            passenger_label = st.selectbox("Passenger", list(passenger_by_label))
-            updated_contact = st.text_input("New contact information")
-            submitted = st.form_submit_button("Save contact information")
 
-        if submitted:
-            if not updated_contact.strip():
-                st.error("Contact information cannot be empty.")
-            elif data.update_passenger_contact(
-                passenger_by_label[passenger_label].id, updated_contact.strip()
-            ):
+def show_update_passenger(data: CityAirlineData) -> None:
+    """Render the required passenger UPDATE feature."""
+    st.subheader("6. Update Passenger Contact")
+    try:
+        passengers = data.list_passengers()
+    except Exception as error:
+        show_database_error(error, "Unable to load passenger profiles.")
+        return
+    if not passengers:
+        st.info("No passenger profiles are available to update.")
+        return
+    labels = {f"{item.contact_information} ({item.id[:8]})": item for item in passengers}
+    with st.form("update_passenger"):
+        passenger = st.selectbox("Passenger", list(labels), format_func=str)
+        contact_information = st.text_input("New contact information")
+        submitted = st.form_submit_button("Save contact information")
+    if submitted:
+        if not contact_information.strip():
+            st.error("Contact information cannot be empty.")
+            return
+        try:
+            updated = data.update_passenger_contact(
+                labels[passenger].id, contact_information.strip()
+            )
+        except Exception as error:
+            show_database_error(error, "Unable to update the passenger profile.")
+        else:
+            if updated:
                 st.success("Passenger contact information updated.")
-                st.rerun()
             else:
                 st.error("Passenger profile was not found.")
 
 
+def show_purchase(data: CityAirlineData) -> None:
+    """Render the required ticket-purchase transaction feature."""
+    st.subheader("7. Purchase Ticket")
+    flight = selected_flight(data)
+    if flight is None:
+        st.info("Search for and select a flight first.")
+        return
+    try:
+        seats = data.list_available_seats(flight.id)
+        passengers = data.list_passengers()
+    except Exception as error:
+        show_database_error(error, "Unable to load ticket options.")
+        return
+    if not seats:
+        st.warning("There are no available seats on this flight.")
+        return
+    seats_by_label = {seat.label: seat for seat in seats}
+    passenger_labels = {
+        f"{item.contact_information} ({item.id[:8]})": item for item in passengers
+    }
+    with st.form("purchase_ticket"):
+        seat = st.selectbox("Available seat", list(seats_by_label))
+        traveler_type = st.radio("Traveler", ["New traveler", "Existing passenger"])
+        passenger = None
+        contact_information = ""
+        if traveler_type == "Existing passenger" and passenger_labels:
+            passenger_label = st.selectbox("Passenger", list(passenger_labels))
+            passenger = passenger_labels[passenger_label]
+        elif traveler_type == "Existing passenger":
+            st.info("No profiles exist yet. Use a new traveler instead.")
+        if traveler_type == "New traveler":
+            contact_information = st.text_input("Contact information (email or phone)")
+        submitted = st.form_submit_button("Purchase ticket")
+    if not submitted:
+        return
+    if traveler_type == "New traveler" and not contact_information.strip():
+        st.error("Contact information is required for a new traveler.")
+        return
+    if traveler_type == "Existing passenger" and passenger is None:
+        st.error("Select a passenger or choose a new traveler.")
+        return
+    try:
+        data.purchase_ticket(
+            seats_by_label[seat].ticket_id,
+            passenger_id=passenger.id if passenger else None,
+            contact_information=contact_information.strip() if not passenger else None,
+        )
+    except TicketUnavailableError:
+        st.error("That seat was just sold. Please choose another available seat.")
+    except Exception as error:
+        show_database_error(error, "Unable to complete the purchase.")
+    else:
+        st.success("Your ticket has been purchased.")
+        st.rerun()
+
+
+def show_demonstrations(data: CityAirlineData) -> None:
+    """Render the required constraint and least-privilege demonstrations."""
+    st.subheader("Database Requirement Demonstrations")
+    if st.button("Demonstrate duplicate ticket constraint"):
+        try:
+            data.demonstrate_duplicate_ticket_constraint()
+        except ConstraintViolationError as error:
+            st.success(str(error))
+        except Exception as error:
+            show_database_error(error, "Unable to run the constraint demonstration.")
+    if st.button("Demonstrate denied flight creation"):
+        try:
+            data.demonstrate_denied_flight_insert()
+        except PermissionDeniedError as error:
+            st.success(str(error))
+        except Exception as error:
+            show_database_error(error, "Unable to run the permission demonstration.")
+
+
 def main() -> None:
-    """Load reference data and show the flight booking workflow."""
-    st.set_page_config(page_title="City Airline", page_icon="✈️")
+    """Load reference data and render each required application workflow."""
+    st.set_page_config(page_title="City Airline")
     st.title("City Airline")
     try:
         data = get_data()
         airports = data.list_airports()
-    except Exception as error:
-        st.error(f"Could not connect to the City Airline database: {error}")
+    except Exception:
+        st.error("Could not connect to the City Airline database.")
         st.caption("Check the MYSQL_* environment variables and database availability.")
         return
-
-    show_search(data, airports)
-    show_contact_update(data)
+    if len(airports) < 2:
+        st.error("At least two airports are required to search for flights.")
+        return
+    tabs = st.tabs(
+        [
+            "Search",
+            "Flight Details",
+            "Seat Summary",
+            "Fare Deals",
+            "Create Profile",
+            "Update Profile",
+            "Purchase",
+            "Demonstrations",
+        ]
+    )
+    with tabs[0]:
+        show_search(data, airports)
+    with tabs[1]:
+        show_flight_details(data)
+    with tabs[2]:
+        show_seat_summary(data)
+    with tabs[3]:
+        show_fare_deals(data, airports)
+    with tabs[4]:
+        show_create_passenger(data)
+    with tabs[5]:
+        show_update_passenger(data)
+    with tabs[6]:
+        show_purchase(data)
+    with tabs[7]:
+        show_demonstrations(data)
 
 
 if __name__ == "__main__":
