@@ -1,5 +1,4 @@
 -- Run this script as root after sql/init_001.up.sql.
--- Replace both placeholder passwords before running it. Do not commit real passwords.
 
 CREATE USER IF NOT EXISTS 'city_airline_client'@'%' IDENTIFIED BY 'root';
 
