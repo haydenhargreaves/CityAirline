@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import date
+from threading import Barrier
 from typing import Any
 from uuid import uuid4
 
@@ -35,6 +38,53 @@ class PermissionDeniedError(Exception):
 ConnectionFactory = Callable[[], Any]
 
 
+@dataclass(frozen=True)
+class ConstraintDemoResult:
+    """Database evidence that the duplicate-ticket constraint rejected an insert."""
+
+    flight_number: str
+    seat_number: int
+    tickets_before: int
+    tickets_after: int
+
+
+@dataclass(frozen=True)
+class TransactionDemoResult:
+    """Database evidence that a failed checkout was rolled back."""
+
+    contact_information: str
+    passengers_before: int
+    passengers_during_transaction: int
+    passengers_after_rollback: int
+
+
+@dataclass(frozen=True)
+class PermissionDemoResult:
+    """Database evidence that a restricted account could not insert a flight."""
+
+    attempted_flight_number: str
+    flights_before: int
+    flights_after: int
+
+
+@dataclass(frozen=True)
+class ConcurrentPurchaseAttempt:
+    """One buyer's result from a simultaneous ticket-purchase attempt."""
+
+    buyer: str
+    contact_information: str
+    outcome: str
+
+
+@dataclass(frozen=True)
+class ConcurrentPurchaseDemoResult:
+    """Verified results from two buyers racing for one available ticket."""
+
+    attempts: tuple[ConcurrentPurchaseAttempt, ConcurrentPurchaseAttempt]
+    final_sale_status: str
+    final_passenger_contact: str | None
+
+
 class CityAirlineData:
     """Read and write application data without exposing SQL to the UI."""
 
@@ -57,6 +107,12 @@ class CityAirlineData:
                 """
             )
             return [Airport(*row) for row in cursor.fetchall()]
+
+    def current_database_account(self) -> str:
+        """Return the authenticated MySQL account used by the customer application."""
+        with self._cursor() as cursor:
+            cursor.execute("SELECT CURRENT_USER()")
+            return str(cursor.fetchone()[0])
 
     def list_passengers(self) -> list[Passenger]:
         """Return passenger profiles for returning travelers."""
@@ -319,6 +375,7 @@ class CityAirlineData:
         ticket_id: str,
         passenger_id: str | None = None,
         contact_information: str | None = None,
+        before_ticket_update: Callable[[], None] | None = None,
     ) -> str:
         """Create or use a traveler and sell an available ticket atomically."""
         connection = self.connection_factory()
@@ -335,6 +392,8 @@ class CityAirlineData:
                     """,
                     (passenger_id, contact_information),
                 )
+            if before_ticket_update:
+                before_ticket_update()
             cursor.execute(
                 """
                 UPDATE Tickets
@@ -360,56 +419,191 @@ class CityAirlineData:
             cursor.close()
             connection.close()
 
-    def demonstrate_duplicate_ticket_constraint(self) -> None:
-        """Attempt a duplicate flight/seat ticket and translate the rejection."""
+    def demonstrate_concurrent_purchase(
+        self, ticket_id: str
+    ) -> ConcurrentPurchaseDemoResult:
+        """Run two simultaneous checkout attempts against one available ticket."""
+        barrier = Barrier(2)
+        contacts = (
+            f"buyer-a-{uuid4().hex[:8]}@demo.io",
+            f"buyer-b-{uuid4().hex[:8]}@demo.io",
+        )
+
+        def purchase(buyer: str, contact_information: str) -> ConcurrentPurchaseAttempt:
+            try:
+                self.purchase_ticket(
+                    ticket_id,
+                    contact_information=contact_information,
+                    before_ticket_update=lambda: barrier.wait(timeout=10),
+                )
+            except TicketUnavailableError:
+                return ConcurrentPurchaseAttempt(
+                    buyer, contact_information, "Lost the race: transaction rolled back"
+                )
+            return ConcurrentPurchaseAttempt(
+                buyer, contact_information, "Won the race: purchase committed"
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(purchase, "Buyer A", contacts[0]),
+                executor.submit(purchase, "Buyer B", contacts[1]),
+            ]
+            attempts = tuple(future.result() for future in futures)
+
+        if sum("Won the race" in attempt.outcome for attempt in attempts) != 1:
+            raise RuntimeError("Expected exactly one buyer to purchase the ticket.")
+
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT Tickets.sale_status, Passengers.contact_information
+                FROM Tickets
+                LEFT JOIN Passengers ON Passengers.id = Tickets.passenger_id
+                WHERE Tickets.id = %s
+                """,
+                (ticket_id,),
+            )
+            ticket = cursor.fetchone()
+        if ticket is None:
+            raise RuntimeError("The selected ticket no longer exists.")
+        return ConcurrentPurchaseDemoResult(attempts, *ticket)
+
+    def demonstrate_duplicate_ticket_constraint(self) -> ConstraintDemoResult:
+        """Attempt a duplicate flight/seat ticket and return the observed evidence."""
         connection = self.data_entry_connection_factory()
         cursor = connection.cursor(buffered=True)
         try:
             cursor.execute(
                 """
-                SELECT cost, seat_id, flight_id
+                SELECT Tickets.cost, Tickets.seat_id, Tickets.flight_id,
+                    Flights.flight_number, Seats.seat_number
                 FROM Tickets
-                ORDER BY id
+                INNER JOIN Flights ON Flights.id = Tickets.flight_id
+                INNER JOIN Seats ON Seats.id = Tickets.seat_id
+                ORDER BY Tickets.id
                 LIMIT 1
                 """
             )
             ticket = cursor.fetchone()
             if ticket is None:
                 raise RuntimeError("No ticket exists for the constraint demonstration.")
+            cost, seat_id, flight_id, flight_number, seat_number = ticket
+            cursor.execute(
+                "SELECT COUNT(*) FROM Tickets WHERE flight_id = %s AND seat_id = %s",
+                (flight_id, seat_id),
+            )
+            tickets_before = cursor.fetchone()[0]
             cursor.execute(
                 """
                 INSERT INTO Tickets (cost, sale_status, seat_id, flight_id)
                 VALUES (%s, 'available', %s, %s)
                 """,
-                ticket,
+                (cost, seat_id, flight_id),
             )
             connection.rollback()
             raise RuntimeError("The duplicate ticket was unexpectedly accepted.")
         except BaseException as error:
             connection.rollback()
             if getattr(error, "errno", None) == 1062:
-                raise ConstraintViolationError(
-                    "MySQL rejected the duplicate ticket for this flight and seat."
-                ) from error
+                cursor.execute(
+                    "SELECT COUNT(*) FROM Tickets WHERE flight_id = %s AND seat_id = %s",
+                    (flight_id, seat_id),
+                )
+                return ConstraintDemoResult(
+                    flight_number,
+                    seat_number,
+                    tickets_before,
+                    cursor.fetchone()[0],
+                )
             raise
         finally:
             cursor.close()
             connection.close()
 
-    def demonstrate_denied_flight_insert(self) -> None:
-        """Attempt a client-account operation that MySQL must deny."""
+    def demonstrate_purchase_rollback(self) -> TransactionDemoResult:
+        """Prove a failed checkout rolls back its temporary passenger record."""
+        contact_information = f"rollback-demo-{uuid4()}@example.invalid"
         connection = self.connection_factory()
         cursor = connection.cursor(buffered=True)
         try:
-            cursor.execute("INSERT INTO Flights (flight_number) VALUES ('permission-check')")
+            cursor.execute(
+                "SELECT COUNT(*) FROM Passengers WHERE contact_information = %s",
+                (contact_information,),
+            )
+            passengers_before = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO Passengers (id, contact_information)
+                VALUES (%s, %s)
+                """,
+                (str(uuid4()), contact_information),
+            )
+            cursor.execute(
+                "SELECT COUNT(*) FROM Passengers WHERE contact_information = %s",
+                (contact_information,),
+            )
+            passengers_during_transaction = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                UPDATE Tickets
+                SET sale_status = 'sold'
+                WHERE id = %s
+                    AND sale_status = 'available'
+                    AND passenger_id IS NULL
+                """,
+                (str(uuid4()),),
+            )
+            if cursor.rowcount != 1:
+                raise TicketUnavailableError("The demonstration ticket is unavailable.")
+            connection.commit()
+            raise RuntimeError("The demonstration ticket was unexpectedly available.")
+        except TicketUnavailableError:
+            connection.rollback()
+            cursor.execute(
+                "SELECT COUNT(*) FROM Passengers WHERE contact_information = %s",
+                (contact_information,),
+            )
+            remaining_passengers = cursor.fetchone()[0]
+            if remaining_passengers:
+                raise RuntimeError("The failed checkout was not rolled back.")
+            return TransactionDemoResult(
+                contact_information,
+                passengers_before,
+                passengers_during_transaction,
+                remaining_passengers,
+            )
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            cursor.close()
+            connection.close()
+
+    def demonstrate_denied_flight_insert(self) -> PermissionDemoResult:
+        """Attempt a client-account operation that MySQL must deny."""
+        connection = self.connection_factory()
+        cursor = connection.cursor(buffered=True)
+        flight_number = f"permission-demo-{uuid4()}"
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM Flights WHERE flight_number = %s", (flight_number,)
+            )
+            flights_before = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO Flights (flight_number) VALUES (%s)", (flight_number,)
+            )
             connection.rollback()
             raise RuntimeError("The client account unexpectedly inserted a flight.")
         except BaseException as error:
             connection.rollback()
             if getattr(error, "errno", None) == 1142:
-                raise PermissionDeniedError(
-                    "The client account is not allowed to create flights."
-                ) from error
+                cursor.execute(
+                    "SELECT COUNT(*) FROM Flights WHERE flight_number = %s", (flight_number,)
+                )
+                return PermissionDemoResult(
+                    flight_number, flights_before, cursor.fetchone()[0]
+                )
             raise
         finally:
             cursor.close()

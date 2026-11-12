@@ -6,8 +6,6 @@ import streamlit as st
 
 from app.data import (
     CityAirlineData,
-    ConstraintViolationError,
-    PermissionDeniedError,
     TicketUnavailableError,
 )
 from app.models import Airport, Flight, FlightSearchResult
@@ -131,29 +129,38 @@ def show_seat_summary(data: CityAirlineData) -> None:
 
 
 def show_fare_deals(data: CityAirlineData, airports: list[Airport]) -> None:
-    """Render the required subquery feature as a separate action."""
-    st.subheader("4. Find Fare Deals")
+    """Render all available fares and their route price summary."""
+    st.subheader("4. View Fares")
     with st.form("fare_deals"):
         departure, arrival, travel_date = airport_controls(airports, "deals")
-        submitted = st.form_submit_button("Find below-average fares")
+        submitted = st.form_submit_button("View fares")
     if not submitted:
         return
     try:
-        deals = data.find_fare_deals(departure.id, arrival.id, travel_date)
+        fares = data.list_route_fares(departure.id, arrival.id, travel_date)
     except Exception as error:
-        show_database_error(error, "Unable to find fare deals right now.")
+        show_database_error(error, "Unable to load fares right now.")
         return
-    if not deals:
-        st.info("No fares on this route are below the route average.")
+    if not fares:
+        st.info("No available fares were found for this route and date.")
         return
+
+    prices = [fare.price for fare in fares]
+    minimum_column, maximum_column, average_column = st.columns(3)
+    minimum_column.metric("Minimum fare", f"${min(prices):.2f}")
+    maximum_column.metric("Maximum fare", f"${max(prices):.2f}")
+    average_column.metric("Average fare", f"${sum(prices) / len(prices):.2f}")
+
     st.dataframe(
         [
             {
-                "Flight": deal.flight_number,
-                "Departure": deal.departure_time,
-                "Lowest available fare": deal.lowest_available_price,
+                "Flight": fare.flight_number,
+                "Departure": fare.departure_time,
+                "Seat": fare.seat_number,
+                "Class": fare.class_designation,
+                "Fare": fare.price,
             }
-            for deal in deals
+            for fare in fares
         ],
         hide_index=True,
         use_container_width=True,
@@ -260,27 +267,62 @@ def show_purchase(data: CityAirlineData) -> None:
         )
     except TicketUnavailableError:
         st.error("That seat was just sold. Please choose another available seat.")
+        st.info("The checkout transaction was rolled back; no passenger or ticket changes were saved.")
     except Exception as error:
         show_database_error(error, "Unable to complete the purchase.")
+        st.info("The checkout transaction was rolled back; no partial purchase was saved.")
     else:
-        st.success("Your ticket has been purchased.")
+        st.success("Your ticket has been purchased. The passenger and ticket sale were committed together.")
         st.rerun()
 
 
 def show_demonstrations(data: CityAirlineData) -> None:
-    """Render the required constraint and least-privilege demonstrations."""
-    st.subheader("Database Requirement Demonstrations")
-    if st.button("Demonstrate duplicate ticket constraint"):
-        try:
-            data.demonstrate_duplicate_ticket_constraint()
-        except ConstraintViolationError as error:
-            st.success(str(error))
-        except Exception as error:
-            show_database_error(error, "Unable to run the constraint demonstration.")
-    if st.button("Demonstrate denied flight creation"):
-        try:
-            data.demonstrate_denied_flight_insert()
-        except PermissionDeniedError as error:
-            st.success(str(error))
-        except Exception as error:
-            show_database_error(error, "Unable to run the permission demonstration.")
+    """Run a visible concurrency demonstration for ticket checkout."""
+    st.subheader("Concurrent Ticket Purchase")
+    st.info(
+        "Choose one available seat, then start two buyers at the same instant. "
+        "Only one transaction can sell the ticket; the other buyer is rolled back."
+    )
+    flight = selected_flight(data)
+    if flight is None:
+        st.warning("Search for and select a flight before running the concurrency demo.")
+        return
+    try:
+        seats = data.list_available_seats(flight.id)
+    except Exception as error:
+        show_database_error(error, "Unable to load available seats.")
+        return
+    if not seats:
+        st.warning("No available seats remain on the selected flight.")
+        return
+
+    seats_by_label = {seat.label: seat for seat in seats}
+    selected_seat = st.selectbox("Ticket both buyers will attempt to purchase", seats_by_label)
+    st.caption(
+        f"Flight {flight.flight_number} · {seats_by_label[selected_seat].label} · "
+        "two independent database transactions"
+    )
+    if not st.button("Start two-buyer race", type="primary"):
+        return
+    try:
+        result = data.demonstrate_concurrent_purchase(seats_by_label[selected_seat].ticket_id)
+    except Exception as error:
+        show_database_error(error, "Unable to run the concurrent purchase demonstration.")
+        return
+
+    st.success("Race complete: exactly one buyer purchased the ticket.")
+    buyer_a, buyer_b = st.columns(2)
+    for column, attempt in zip((buyer_a, buyer_b), result.attempts, strict=True):
+        column.subheader(attempt.buyer)
+        column.code(attempt.contact_information, language="text")
+        column.metric("Outcome", attempt.outcome)
+    status, passenger = st.columns(2)
+    status.metric("Final ticket status", result.final_sale_status.title())
+    passenger.metric("Passenger saved on ticket", result.final_passenger_contact or "None")
+    st.code(
+        "Both buyers reached checkout together\n"
+        "Buyer 1 updated the available ticket and COMMITed\n"
+        "Buyer 2 found no available ticket row and ROLLBACKed\n"
+        "Verification: one sold ticket, assigned to the winning buyer",
+        language="text",
+    )

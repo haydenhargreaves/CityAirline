@@ -36,6 +36,7 @@ def main() -> None:
     if len(airports) < 2:
         st.error("At least two airports are required to search for flights.")
         return
+    st.session_state["airports"] = airports
 
     tabs = st.tabs(
         [
