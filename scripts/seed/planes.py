@@ -43,6 +43,34 @@ planes = [
         "seat_count": 100,
         "first_class_count": 24,
     },
+    {
+        "name": "City Cruiser 700",
+        "code": "CC700",
+        "tail_number": "N10007",
+        "seat_count": 108,
+        "first_class_count": 28,
+    },
+    {
+        "name": "City Cruiser 800",
+        "code": "CC800",
+        "tail_number": "N10008",
+        "seat_count": 116,
+        "first_class_count": 28,
+    },
+    {
+        "name": "City Voyager 900",
+        "code": "CV900",
+        "tail_number": "N10009",
+        "seat_count": 124,
+        "first_class_count": 32,
+    },
+    {
+        "name": "City Voyager 1000",
+        "code": "CV1000",
+        "tail_number": "N10010",
+        "seat_count": 132,
+        "first_class_count": 32,
+    },
 ]
 
 

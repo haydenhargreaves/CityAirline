@@ -53,6 +53,51 @@ was updated.
 This will provide all of the data we may need to keep track of changes and creations
 in the database! **AND** it requires no extra work when creating records!
 
+## Running the Project
+
+Prerequisites: Python 3.12+, Docker Desktop, and the MySQL command-line client.
+
+1. Start MySQL:
+
+```bash
+docker compose up -d
+```
+
+2. Create the database tables:
+
+```bash
+docker compose exec -T mysql mysql -uroot -proot < sql/init_001.up.sql
+```
+
+3. Create the limited application accounts by replacing the password placeholders
+in `sql/application_accounts.sql`, then run it as root:
+
+```bash
+docker compose exec -T mysql mysql -uroot -proot < sql/application_accounts.sql
+```
+
+4. Configure the `MYSQL_*` variables with the root account only while running
+the seed scripts, then install dependencies and seed the database:
+
+```bash
+set -a; source .env; set +a
+pip install -r requirements.txt
+python -m scripts.seed
+```
+
+5. Configure `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, and
+`MYSQL_DATABASE` for `city_airline_client`. Do not run the Streamlit app as
+root. See [.env.example](.env.example).
+
+6. Start the application:
+
+```bash
+streamlit run app.py
+```
+
+The search controls require an exact seeded route and date. The first three seeded
+flights share a route and date so the Fare Deals tab can demonstrate its report.
+
 ## Python Scripts
 
 To run the python seeding scripts, they are to be run in this way:
@@ -66,3 +111,30 @@ The entire database can be seeded by running the following command:
 ```bash
 python -m scripts.seed
 ```
+
+The Streamlit app supports flight search, seat selection, booking, and passenger
+contact updates.
+
+## Application Features
+
+| User action | Requirement |
+| --- | --- |
+| Search Flights | Search (`WHERE`) |
+| View Flight Details | Combine tables (`JOIN`) |
+| View Seat Summary | Summary (`GROUP BY`) |
+| Find Fare Deals | Subquery |
+| Create Passenger Profile | Add (`INSERT`) |
+| Update Passenger Contact | Change (`UPDATE`) |
+| Purchase Ticket | Transaction |
+
+## Team Roles
+
+| Team member | Responsibility |
+| --- | --- |
+| Preston | Streamlit application and interface |
+| Hayden | Queries, transactions, accounts, and grants |
+| Cody | Schema, seed data, testing, documentation, and presentation |
+
+## AI Use
+
+AI was used for permitted application interface and boilerplate assistance.

@@ -19,6 +19,7 @@
           packages = with pkgs; [
             python3
             python3Packages.mysql-connector
+            python3Packages.streamlit
             # Add packages here...
           ];
 

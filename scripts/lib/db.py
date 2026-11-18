@@ -22,15 +22,36 @@ def get_connection(**overrides: Any) -> Any:
             "Install it with: pip install mysql-connector-python"
         ) from error
 
+    user = overrides.pop("user", None) or _required_environment("MYSQL_USER")
+    password = overrides.pop("password", None) or _required_environment(
+        "MYSQL_PASSWORD"
+    )
     config = {
         "host": os.getenv("MYSQL_HOST", "localhost"),
         "port": int(os.getenv("MYSQL_PORT", "3306")),
-        "user": os.getenv("MYSQL_USER", "root"),
-        "password": os.getenv("MYSQL_PASSWORD", "root"),
+        "user": user,
+        "password": password,
         "database": os.getenv("MYSQL_DATABASE", "city_airline"),
     }
     config.update(overrides)
     return mysql.connector.connect(**config)
+
+
+def get_data_entry_connection(**overrides: Any) -> Any:
+    """Create a connection for the staff-only constraint demonstration."""
+    overrides.setdefault("user", _required_environment("MYSQL_DATA_ENTRY_USER"))
+    overrides.setdefault(
+        "password", _required_environment("MYSQL_DATA_ENTRY_PASSWORD")
+    )
+    return get_connection(**overrides)
+
+
+def _required_environment(name: str) -> str:
+    """Return a required configuration value without providing unsafe defaults."""
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} must be set before connecting to MySQL.")
+    return value
 
 
 @contextmanager
